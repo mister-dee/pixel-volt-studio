@@ -52,6 +52,15 @@ export default {
 					DEFAULT: 'hsl(var(--card))',
 					foreground: 'hsl(var(--card-foreground))'
 				},
+				// Circuit component colors
+				resistor: 'hsl(var(--resistor))',
+				capacitor: 'hsl(var(--capacitor))',
+				inductor: 'hsl(var(--inductor))',
+				switch: 'hsl(var(--switch))',
+				wire: 'hsl(var(--wire))',
+				current: 'hsl(var(--current))',
+				'canvas-bg': 'hsl(var(--canvas-bg))',
+				grid: 'hsl(var(--grid))',
 				sidebar: {
 					DEFAULT: 'hsl(var(--sidebar-background))',
 					foreground: 'hsl(var(--sidebar-foreground))',
