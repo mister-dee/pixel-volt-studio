@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Component, Wire, Point, CurrentFlow, ComponentTemplate } from '../types/ComponentTypes';
+import { Component, Wire, Point, CurrentFlow, ComponentTemplate, Circuit } from '../types/ComponentTypes';
+import { PREBUILT_CIRCUITS } from '../data/prebuiltCircuits';
 import { toast } from 'sonner';
 
 interface CanvasProps {
@@ -8,6 +9,9 @@ interface CanvasProps {
   onComponentAdd: (component: Component) => void;
   onComponentMove: (id: string, x: number, y: number) => void;
   draggedComponent: ComponentTemplate | null;
+  currentSpeed: number;
+  currentCircuit: string | null;
+  onSwitchClick: (switchId: string) => void;
 }
 
 const Canvas: React.FC<CanvasProps> = ({
@@ -15,7 +19,10 @@ const Canvas: React.FC<CanvasProps> = ({
   wires,
   onComponentAdd,
   onComponentMove,
-  draggedComponent
+  draggedComponent,
+  currentSpeed,
+  currentCircuit,
+  onSwitchClick
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [currentFlows, setCurrentFlows] = useState<CurrentFlow[]>([]);
@@ -62,8 +69,27 @@ const Canvas: React.FC<CanvasProps> = ({
     ctx.globalAlpha = 1;
   };
 
+  // Snap component to nearest wire point
+  const snapToWire = (x: number, y: number): { x: number, y: number } => {
+    const snapDistance = 30;
+    let closestPoint = { x, y };
+    let minDistance = snapDistance;
+
+    wires.forEach(wire => {
+      wire.path.forEach(point => {
+        const distance = Math.sqrt(Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2));
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestPoint = { x: point.x - 30, y: point.y - 15 }; // Offset for component center
+        }
+      });
+    });
+
+    return closestPoint;
+  };
+
   const drawComponent = (ctx: CanvasRenderingContext2D, component: Component) => {
-    const { x, y, width, height, type, value } = component;
+    const { x, y, width, height, type, value, switchState } = component;
     
     // Component background
     ctx.fillStyle = getComponentColor(type);
@@ -87,7 +113,7 @@ const Canvas: React.FC<CanvasProps> = ({
       case 'resistor': symbol = '⟱'; break;
       case 'capacitor': symbol = '‖'; break;
       case 'inductor': symbol = '∿'; break;
-      case 'switch': symbol = '○/○'; break;
+      case 'switch': symbol = switchState ? '○─○' : '○/○'; break;
       case 'voltage-source': symbol = '+/-'; break;
       case 'ac-source': symbol = '∼'; break;
     }
@@ -131,7 +157,15 @@ const Canvas: React.FC<CanvasProps> = ({
     ctx.stroke();
   };
 
+  // Check if current should flow (all switches in circuit must be closed)
+  const shouldAnimateCurrent = (): boolean => {
+    const switchComponents = components.filter(comp => comp.type === 'switch');
+    return switchComponents.length === 0 || switchComponents.every(comp => comp.switchState);
+  };
+
   const drawCurrentFlow = (ctx: CanvasRenderingContext2D, wire: Wire, flows: CurrentFlow[]) => {
+    if (!shouldAnimateCurrent()) return;
+    
     const wireFlows = flows.filter(f => f.wireId === wire.id);
     
     wireFlows.forEach(flow => {
@@ -161,6 +195,54 @@ const Canvas: React.FC<CanvasProps> = ({
     });
   };
 
+  // Draw circuit description block
+  const drawCircuitDescription = (ctx: CanvasRenderingContext2D) => {
+    if (!currentCircuit) return;
+    
+    const circuit = PREBUILT_CIRCUITS.find(c => c.id === currentCircuit);
+    if (!circuit || !circuit.descriptionPosition) return;
+
+    const { x, y } = circuit.descriptionPosition;
+    const padding = 12;
+    const lineHeight = 18;
+    const maxWidth = 200;
+
+    // Background
+    ctx.fillStyle = '#1f2937';
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, maxWidth, lineHeight * 3 + padding * 2);
+    ctx.strokeRect(x, y, maxWidth, lineHeight * 3 + padding * 2);
+
+    // Text
+    ctx.fillStyle = '#e5e7eb';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    
+    ctx.fillText(circuit.name, x + padding, y + padding);
+    ctx.font = '12px monospace';
+    ctx.fillStyle = '#9ca3af';
+    
+    // Wrap description text
+    const words = circuit.description.split(' ');
+    let line = '';
+    let lineY = y + padding + lineHeight;
+    
+    words.forEach(word => {
+      const testLine = line + word + ' ';
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth - padding * 2 && line !== '') {
+        ctx.fillText(line.trim(), x + padding, lineY);
+        line = word + ' ';
+        lineY += lineHeight;
+      } else {
+        line = testLine;
+      }
+    });
+    ctx.fillText(line.trim(), x + padding, lineY);
+  };
+
   const drawCanvas = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -184,6 +266,9 @@ const Canvas: React.FC<CanvasProps> = ({
     components.forEach(component => {
       drawComponent(ctx, component);
     });
+
+    // Draw circuit description
+    drawCircuitDescription(ctx);
 
     // Draw drop zone indication when dragging
     if (isDragOver && draggedComponent) {
@@ -213,13 +298,13 @@ const Canvas: React.FC<CanvasProps> = ({
       setCurrentFlows(prevFlows => 
         prevFlows.map(flow => ({
           ...flow,
-          position: (flow.position + 0.01 * flow.direction) % 1
+          position: (flow.position + 0.01 * currentSpeed * flow.direction) % 1
         }))
       );
     }, 50);
 
     return () => clearInterval(animationInterval);
-  }, [wires]);
+  }, [wires, currentSpeed]);
 
   // Redraw canvas when data changes
   useEffect(() => {
@@ -267,14 +352,18 @@ const Canvas: React.FC<CanvasProps> = ({
         const x = e.clientX - rect.left - 30; // Center the component
         const y = e.clientY - rect.top - 15;
 
+        // Snap to wire if close enough
+        const snappedPosition = snapToWire(x, y);
+
         const newComponent: Component = {
           id: `${componentData.type}-${Date.now()}`,
           type: componentData.type,
-          x: Math.max(0, Math.min(x, rect.width - 60)),
-          y: Math.max(0, Math.min(y, rect.height - 30)),
+          x: Math.max(0, Math.min(snappedPosition.x, rect.width - 60)),
+          y: Math.max(0, Math.min(snappedPosition.y, rect.height - 30)),
           value: componentData.value,
           width: 60,
-          height: 30
+          height: 30,
+          switchState: componentData.type === 'switch' ? true : undefined
         };
 
         onComponentAdd(newComponent);
@@ -302,6 +391,12 @@ const Canvas: React.FC<CanvasProps> = ({
     );
 
     if (clickedComponent) {
+      // Handle switch click
+      if (clickedComponent.type === 'switch') {
+        onSwitchClick(clickedComponent.id);
+        return;
+      }
+      
       setDraggedComponentId(clickedComponent.id);
       setDragOffset({
         x: x - clickedComponent.x,
@@ -320,9 +415,12 @@ const Canvas: React.FC<CanvasProps> = ({
     const x = e.clientX - rect.left - dragOffset.x;
     const y = e.clientY - rect.top - dragOffset.y;
 
+    // Snap to wire if close enough during drag
+    const snappedPosition = snapToWire(x, y);
+
     onComponentMove(draggedComponentId, 
-      Math.max(0, Math.min(x, rect.width - 60)),
-      Math.max(0, Math.min(y, rect.height - 30))
+      Math.max(0, Math.min(snappedPosition.x, rect.width - 60)),
+      Math.max(0, Math.min(snappedPosition.y, rect.height - 30))
     );
   };
 

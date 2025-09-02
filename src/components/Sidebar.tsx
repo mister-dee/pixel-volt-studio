@@ -2,16 +2,19 @@ import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { Slider } from '@/components/ui/slider';
 import { COMPONENT_TEMPLATES, ComponentTemplate } from '../types/ComponentTypes';
 import { PREBUILT_CIRCUITS } from '../data/prebuiltCircuits';
-import { Zap, Cpu, Gauge } from 'lucide-react';
+import { Zap, Cpu, Gauge, Activity } from 'lucide-react';
 
 interface SidebarProps {
   onComponentDrag: (componentType: ComponentTemplate) => void;
   onCircuitLoad: (circuitId: string) => void;
+  currentSpeed: number;
+  onSpeedChange: (speed: number) => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ onComponentDrag, onCircuitLoad }) => {
+const Sidebar: React.FC<SidebarProps> = ({ onComponentDrag, onCircuitLoad, currentSpeed, onSpeedChange }) => {
   const handleDragStart = (e: React.DragEvent, component: ComponentTemplate) => {
     e.dataTransfer.setData('application/json', JSON.stringify(component));
     onComponentDrag(component);
@@ -82,6 +85,38 @@ const Sidebar: React.FC<SidebarProps> = ({ onComponentDrag, onCircuitLoad }) => 
               </div>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Separator />
+
+      {/* Current Flow Control */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Activity className="w-5 h-5 text-primary" />
+            Current Flow
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Speed</span>
+              <span>{Math.round(currentSpeed * 100)}%</span>
+            </div>
+            <Slider
+              value={[currentSpeed]}
+              onValueChange={(value) => onSpeedChange(value[0])}
+              max={2}
+              min={0.1}
+              step={0.1}
+              className="w-full"
+            />
+            <div className="flex justify-between text-xs text-muted-foreground">
+              <span>Slow</span>
+              <span>Fast</span>
+            </div>
+          </div>
         </CardContent>
       </Card>
 

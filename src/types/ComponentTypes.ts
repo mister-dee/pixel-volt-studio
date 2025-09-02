@@ -9,6 +9,7 @@ export interface Component {
   width: number;
   height: number;
   rotation?: number;
+  switchState?: boolean; // for switch components
 }
 
 export interface Wire {
@@ -31,6 +32,7 @@ export interface Circuit {
   description: string;
   components: Component[];
   wires: Wire[];
+  descriptionPosition?: Point; // position for description block on canvas
 }
 
 export interface CurrentFlow {

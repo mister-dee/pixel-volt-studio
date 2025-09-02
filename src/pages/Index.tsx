@@ -9,6 +9,8 @@ const Index = () => {
   const [components, setComponents] = useState<Component[]>([]);
   const [wires, setWires] = useState<Wire[]>([]);
   const [draggedComponent, setDraggedComponent] = useState<ComponentTemplate | null>(null);
+  const [currentSpeed, setCurrentSpeed] = useState<number>(0.5);
+  const [currentCircuit, setCurrentCircuit] = useState<string | null>(null);
 
   const handleComponentAdd = (component: Component) => {
     setComponents(prev => [...prev, component]);
@@ -31,6 +33,7 @@ const Index = () => {
     if (circuit) {
       setComponents(circuit.components);
       setWires(circuit.wires);
+      setCurrentCircuit(circuitId);
       toast.success(`${circuit.name} loaded successfully!`);
     }
   };
@@ -38,7 +41,18 @@ const Index = () => {
   const handleClearCanvas = () => {
     setComponents([]);
     setWires([]);
+    setCurrentCircuit(null);
     toast.info('Canvas cleared');
+  };
+
+  const handleSwitchClick = (switchId: string) => {
+    setComponents(prev => 
+      prev.map(comp => 
+        comp.id === switchId && comp.type === 'switch' 
+          ? { ...comp, switchState: !comp.switchState }
+          : comp
+      )
+    );
   };
 
   return (
@@ -46,6 +60,8 @@ const Index = () => {
       <Sidebar 
         onComponentDrag={handleComponentDrag}
         onCircuitLoad={handleCircuitLoad}
+        currentSpeed={currentSpeed}
+        onSpeedChange={setCurrentSpeed}
       />
       <Canvas
         components={components}
@@ -53,6 +69,9 @@ const Index = () => {
         onComponentAdd={handleComponentAdd}
         onComponentMove={handleComponentMove}
         draggedComponent={draggedComponent}
+        currentSpeed={currentSpeed}
+        currentCircuit={currentCircuit}
+        onSwitchClick={handleSwitchClick}
       />
     </div>
   );

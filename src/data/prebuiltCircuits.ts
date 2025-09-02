@@ -5,10 +5,11 @@ export const DC_CIRCUIT: Circuit = {
   id: 'dc-circuit',
   name: 'DC Circuit',
   description: 'Basic DC circuit with voltage source, resistor, and switch',
+  descriptionPosition: { x: 600, y: 150 },
   components: [
     { ...createComponent('voltage-source', 100, 200), id: 'dc-source' },
     { ...createComponent('resistor', 250, 200), id: 'dc-resistor' },
-    { ...createComponent('switch', 400, 200), id: 'dc-switch' }
+    { ...createComponent('switch', 400, 200), id: 'dc-switch', switchState: true }
   ],
   wires: [
     createWire('dc-source', 'dc-resistor', 'right', 'left', [
@@ -33,6 +34,7 @@ export const AC_CIRCUIT: Circuit = {
   id: 'ac-circuit',
   name: 'AC Circuit',
   description: 'AC circuit with RLC components in series',
+  descriptionPosition: { x: 720, y: 150 },
   components: [
     { ...createComponent('ac-source', 100, 200), id: 'ac-source' },
     { ...createComponent('resistor', 250, 200), id: 'ac-resistor' },
@@ -65,7 +67,8 @@ export const AC_CIRCUIT: Circuit = {
 export const OHMS_LAW_CIRCUIT: Circuit = {
   id: 'ohms-law',
   name: "Ohm's Law Demo",
-  description: 'Simple circuit demonstrating V = I × R',
+  description: 'Simple circuit demonstrating V = I × R (Current: 3A)',
+  descriptionPosition: { x: 550, y: 150 },
   components: [
     { ...createComponent('voltage-source', 200, 200), id: 'ohm-source', value: '9V' },
     { ...createComponent('resistor', 400, 200), id: 'ohm-resistor', value: '3Ω' }
