@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { Component, Wire, Point, CurrentFlow, ComponentTemplate, Circuit } from '../types/ComponentTypes';
 import { PREBUILT_CIRCUITS } from '../data/prebuiltCircuits';
+import { calculateCircuitPhysics, PhysicsState } from '../utils/circuitPhysics';
 import { toast } from 'sonner';
 
 interface CanvasProps {
@@ -29,6 +30,8 @@ const Canvas: React.FC<CanvasProps> = ({
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedComponentId, setDraggedComponentId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [physicsState, setPhysicsState] = useState<PhysicsState | null>(null);
+  const [lastUpdateTime, setLastUpdateTime] = useState(Date.now());
 
   // Component symbols and colors
   const getComponentColor = (type: string): string => {
@@ -123,6 +126,19 @@ const Canvas: React.FC<CanvasProps> = ({
     // Component value
     ctx.font = '10px monospace';
     ctx.fillText(value, centerX, centerY + 8);
+    
+    // Show physics info for certain components
+    if (physicsState && (type === 'resistor' || type === 'capacitor')) {
+      ctx.font = '8px monospace';
+      ctx.fillStyle = '#9ca3af';
+      if (type === 'resistor') {
+        const current = physicsState.current.toFixed(2);
+        ctx.fillText(`I=${current}A`, centerX, centerY + 18);
+      } else if (type === 'capacitor') {
+        const charge = (physicsState.capacitorCharge / physicsState.voltage * 100).toFixed(0);
+        ctx.fillText(`${charge}%`, centerX, centerY + 18);
+      }
+    }
 
     // Connection points
     ctx.fillStyle = '#10b981';
@@ -157,14 +173,23 @@ const Canvas: React.FC<CanvasProps> = ({
     ctx.stroke();
   };
 
-  // Check if current should flow (all switches in circuit must be closed)
-  const shouldAnimateCurrent = (): boolean => {
+  // Check if current should flow and get physics-based speed
+  const getCurrentFlowSpeed = (): number => {
+    if (!physicsState) return 0;
+    
     const switchComponents = components.filter(comp => comp.type === 'switch');
-    return switchComponents.length === 0 || switchComponents.every(comp => comp.switchState);
+    const hasOpenSwitch = switchComponents.some(comp => !comp.switchState);
+    
+    if (hasOpenSwitch) return 0;
+    
+    // Scale current to animation speed (normalize to 0-2 range)
+    const normalizedCurrent = Math.min(physicsState.current / 5, 2);
+    return normalizedCurrent * currentSpeed;
   };
 
   const drawCurrentFlow = (ctx: CanvasRenderingContext2D, wire: Wire, flows: CurrentFlow[]) => {
-    if (!shouldAnimateCurrent()) return;
+    const flowSpeed = getCurrentFlowSpeed();
+    if (flowSpeed === 0) return;
     
     const wireFlows = flows.filter(f => f.wireId === wire.id);
     
@@ -184,12 +209,13 @@ const Canvas: React.FC<CanvasProps> = ({
       const x = start.x + (end.x - start.x) * segmentProgress;
       const y = start.y + (end.y - start.y) * segmentProgress;
 
-      // Draw current dot
-      ctx.fillStyle = '#ef4444';
+      // Draw current dot with physics-based intensity
+      const intensity = physicsState ? Math.min(physicsState.current / 2, 1) : 0.5;
+      ctx.fillStyle = `rgba(239, 68, 68, ${intensity})`;
       ctx.shadowColor = '#ef4444';
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur = 6 * intensity;
       ctx.beginPath();
-      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.arc(x, y, 3 + intensity, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowBlur = 0;
     });
@@ -280,6 +306,23 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
+  // Physics calculation loop
+  useEffect(() => {
+    const physicsInterval = setInterval(() => {
+      const currentTime = Date.now();
+      const newPhysicsState = calculateCircuitPhysics(
+        components,
+        wires,
+        currentTime,
+        physicsState || undefined
+      );
+      setPhysicsState(newPhysicsState);
+      setLastUpdateTime(currentTime);
+    }, 100); // Update physics every 100ms
+
+    return () => clearInterval(physicsInterval);
+  }, [components, wires]);
+
   // Animation loop for current flow
   useEffect(() => {
     if (wires.length === 0) return;
@@ -295,16 +338,17 @@ const Canvas: React.FC<CanvasProps> = ({
     setCurrentFlows(flows);
 
     const animationInterval = setInterval(() => {
+      const flowSpeed = getCurrentFlowSpeed();
       setCurrentFlows(prevFlows => 
         prevFlows.map(flow => ({
           ...flow,
-          position: (flow.position + 0.01 * currentSpeed * flow.direction) % 1
+          position: (flow.position + 0.01 * flowSpeed * flow.direction) % 1
         }))
       );
     }, 50);
 
     return () => clearInterval(animationInterval);
-  }, [wires, currentSpeed]);
+  }, [wires, currentSpeed, physicsState]);
 
   // Redraw canvas when data changes
   useEffect(() => {
@@ -447,6 +491,13 @@ const Canvas: React.FC<CanvasProps> = ({
         <div className="text-sm text-muted-foreground space-y-1">
           <div>Components: {components.length}</div>
           <div>Wires: {wires.length}</div>
+          {physicsState && (
+            <>
+              <div>Voltage: {physicsState.voltage.toFixed(1)}V</div>
+              <div>Current: {physicsState.current.toFixed(2)}A</div>
+              <div>Resistance: {physicsState.resistance.toFixed(1)}Ω</div>
+            </>
+          )}
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-current animate-pulse"></div>
             Current flowing
