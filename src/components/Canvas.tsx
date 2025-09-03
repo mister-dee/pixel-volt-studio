@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Component, Wire, Point, CurrentFlow, ComponentTemplate, Circuit } from '../types/ComponentTypes';
+import { Component, Wire, Point, ComponentTemplate, Circuit } from '../types/ComponentTypes';
 import { PREBUILT_CIRCUITS } from '../data/prebuiltCircuits';
-import { calculateCircuitPhysics, PhysicsState } from '../utils/circuitPhysics';
+import { findNearestWirePoint } from '../utils/geometry';
+import { getCurrentAnimationSpeed } from '../simulation';
 import { toast } from 'sonner';
 
 interface CanvasProps {
@@ -13,6 +14,8 @@ interface CanvasProps {
   currentSpeed: number;
   currentCircuit: string | null;
   onSwitchClick: (switchId: string) => void;
+  onComponentSelect: (componentId: string) => void;
+  currentMagnitudeRef: React.MutableRefObject<number>;
 }
 
 const Canvas: React.FC<CanvasProps> = ({
@@ -23,15 +26,93 @@ const Canvas: React.FC<CanvasProps> = ({
   draggedComponent,
   currentSpeed,
   currentCircuit,
-  onSwitchClick
+  onSwitchClick,
+  onComponentSelect,
+  currentMagnitudeRef
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [currentFlows, setCurrentFlows] = useState<CurrentFlow[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [draggedComponentId, setDraggedComponentId] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [physicsState, setPhysicsState] = useState<PhysicsState | null>(null);
-  const [lastUpdateTime, setLastUpdateTime] = useState(Date.now());
+  
+  // Animation state - using refs to avoid re-render loops in RAF
+  const animationIdRef = useRef<number | null>(null);
+  const lastTimeRef = useRef<number>(0);
+  const progressRef = useRef<number>(0); // Current position along path (0-1)
+  const isAnimatingRef = useRef<boolean>(false);
+  const pathRef = useRef<Point[]>([]);
+  const pathLengthsRef = useRef<number[]>([]);
+
+  // Build animation path from wires
+  useEffect(() => {
+    if (wires.length === 0) {
+      pathRef.current = [];
+      pathLengthsRef.current = [];
+      return;
+    }
+
+    // Simple path construction - just concatenate all wire paths
+    const fullPath: Point[] = [];
+    wires.forEach(wire => {
+      if (wire.path.length > 0) {
+        fullPath.push(...wire.path);
+      }
+    });
+
+    // Calculate cumulative lengths for parametric traversal
+    const lengths: number[] = [0];
+    for (let i = 1; i < fullPath.length; i++) {
+      const dx = fullPath[i].x - fullPath[i - 1].x;
+      const dy = fullPath[i].y - fullPath[i - 1].y;
+      const segmentLength = Math.sqrt(dx * dx + dy * dy);
+      lengths.push(lengths[lengths.length - 1] + segmentLength);
+    }
+
+    pathRef.current = fullPath;
+    pathLengthsRef.current = lengths;
+  }, [wires]);
+
+  // Stable RAF animation loop
+  useEffect(() => {
+    const animate = (currentTime: number) => {
+      const dt = (currentTime - lastTimeRef.current) / 1000; // Convert to seconds
+      lastTimeRef.current = currentTime;
+
+      const currentMagnitude = currentMagnitudeRef.current;
+      const animationSpeed = getCurrentAnimationSpeed(currentMagnitude, currentSpeed);
+
+      // Check if animation should be running
+      const shouldAnimate = animationSpeed > 0 && pathRef.current.length > 1;
+      
+      if (shouldAnimate && !isAnimatingRef.current) {
+        isAnimatingRef.current = true;
+      } else if (!shouldAnimate && isAnimatingRef.current) {
+        isAnimatingRef.current = false;
+      }
+
+      if (isAnimatingRef.current && pathLengthsRef.current.length > 1) {
+        const totalLength = pathLengthsRef.current[pathLengthsRef.current.length - 1];
+        if (totalLength > 0) {
+          const distance = animationSpeed * dt;
+          progressRef.current = (progressRef.current + distance / totalLength) % 1;
+        }
+      }
+
+      // Continue animation
+      animationIdRef.current = requestAnimationFrame(animate);
+    };
+
+    // Start animation loop
+    lastTimeRef.current = performance.now();
+    animationIdRef.current = requestAnimationFrame(animate);
+
+    // Cleanup
+    return () => {
+      if (animationIdRef.current) {
+        cancelAnimationFrame(animationIdRef.current);
+      }
+    };
+  }, [currentSpeed]); // Re-start loop when speed changes
 
   // Component symbols and colors
   const getComponentColor = (type: string): string => {
@@ -72,27 +153,17 @@ const Canvas: React.FC<CanvasProps> = ({
     ctx.globalAlpha = 1;
   };
 
-  // Snap component to nearest wire point
-  const snapToWire = (x: number, y: number): { x: number, y: number } => {
-    const snapDistance = 30;
-    let closestPoint = { x, y };
-    let minDistance = snapDistance;
-
-    wires.forEach(wire => {
-      wire.path.forEach(point => {
-        const distance = Math.sqrt(Math.pow(x - point.x, 2) + Math.pow(y - point.y, 2));
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestPoint = { x: point.x - 30, y: point.y - 15 }; // Offset for component center
-        }
-      });
-    });
-
-    return closestPoint;
-  };
-
   const drawComponent = (ctx: CanvasRenderingContext2D, component: Component) => {
-    const { x, y, width, height, type, value, switchState } = component;
+    const { x, y, width, height, type, value, switchState, isSelected } = component;
+    
+    // Selection highlight
+    if (isSelected) {
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([5, 5]);
+      ctx.strokeRect(x - 2, y - 2, width + 4, height + 4);
+      ctx.setLineDash([]);
+    }
     
     // Component background
     ctx.fillStyle = getComponentColor(type);
@@ -126,19 +197,6 @@ const Canvas: React.FC<CanvasProps> = ({
     // Component value
     ctx.font = '10px monospace';
     ctx.fillText(value, centerX, centerY + 8);
-    
-    // Show physics info for certain components
-    if (physicsState && (type === 'resistor' || type === 'capacitor')) {
-      ctx.font = '8px monospace';
-      ctx.fillStyle = '#9ca3af';
-      if (type === 'resistor') {
-        const current = physicsState.current.toFixed(2);
-        ctx.fillText(`I=${current}A`, centerX, centerY + 18);
-      } else if (type === 'capacitor') {
-        const charge = (physicsState.capacitorCharge / physicsState.voltage * 100).toFixed(0);
-        ctx.fillText(`${charge}%`, centerX, centerY + 18);
-      }
-    }
 
     // Connection points
     ctx.fillStyle = '#10b981';
@@ -173,52 +231,49 @@ const Canvas: React.FC<CanvasProps> = ({
     ctx.stroke();
   };
 
-  // Check if current should flow and get physics-based speed
-  const getCurrentFlowSpeed = (): number => {
-    if (!physicsState) return 0;
+  const drawCurrentFlow = (ctx: CanvasRenderingContext2D) => {
+    if (!isAnimatingRef.current || pathRef.current.length < 2) return;
+
+    const path = pathRef.current;
+    const lengths = pathLengthsRef.current;
+    const progress = progressRef.current;
+    const totalLength = lengths[lengths.length - 1];
     
-    const switchComponents = components.filter(comp => comp.type === 'switch');
-    const hasOpenSwitch = switchComponents.some(comp => !comp.switchState);
+    if (totalLength <= 0) return;
+
+    // Find position along path
+    const targetDistance = progress * totalLength;
+    let segmentIndex = 0;
     
-    if (hasOpenSwitch) return 0;
+    for (let i = 1; i < lengths.length; i++) {
+      if (targetDistance <= lengths[i]) {
+        segmentIndex = i - 1;
+        break;
+      }
+    }
     
-    // Scale current to animation speed (normalize to 0-2 range)
-    const normalizedCurrent = Math.min(physicsState.current / 5, 2);
-    return normalizedCurrent * currentSpeed;
-  };
+    if (segmentIndex >= path.length - 1) return;
 
-  const drawCurrentFlow = (ctx: CanvasRenderingContext2D, wire: Wire, flows: CurrentFlow[]) => {
-    const flowSpeed = getCurrentFlowSpeed();
-    if (flowSpeed === 0) return;
+    const segmentProgress = lengths[segmentIndex + 1] - lengths[segmentIndex];
+    const localProgress = segmentProgress > 0 ? (targetDistance - lengths[segmentIndex]) / segmentProgress : 0;
     
-    const wireFlows = flows.filter(f => f.wireId === wire.id);
+    const start = path[segmentIndex];
+    const end = path[segmentIndex + 1];
     
-    wireFlows.forEach(flow => {
-      if (wire.path.length < 2) return;
+    const x = start.x + (end.x - start.x) * localProgress;
+    const y = start.y + (end.y - start.y) * localProgress;
 
-      // Calculate position along the wire path
-      const totalSegments = wire.path.length - 1;
-      const segmentIndex = Math.floor(flow.position * totalSegments);
-      const segmentProgress = (flow.position * totalSegments) % 1;
-
-      if (segmentIndex >= totalSegments) return;
-
-      const start = wire.path[segmentIndex];
-      const end = wire.path[segmentIndex + 1];
-
-      const x = start.x + (end.x - start.x) * segmentProgress;
-      const y = start.y + (end.y - start.y) * segmentProgress;
-
-      // Draw current dot with physics-based intensity
-      const intensity = physicsState ? Math.min(physicsState.current / 2, 1) : 0.5;
-      ctx.fillStyle = `rgba(239, 68, 68, ${intensity})`;
-      ctx.shadowColor = '#ef4444';
-      ctx.shadowBlur = 6 * intensity;
-      ctx.beginPath();
-      ctx.arc(x, y, 3 + intensity, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    });
+    // Draw current dot
+    const currentMagnitude = currentMagnitudeRef.current;
+    const intensity = Math.min(currentMagnitude / 2, 1);
+    
+    ctx.fillStyle = `rgba(239, 68, 68, ${0.8 + intensity * 0.2})`;
+    ctx.shadowColor = '#ef4444';
+    ctx.shadowBlur = 6 * (0.5 + intensity * 0.5);
+    ctx.beginPath();
+    ctx.arc(x, y, 3 + intensity, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
   };
 
   // Draw circuit description block
@@ -285,8 +340,10 @@ const Canvas: React.FC<CanvasProps> = ({
     // Draw wires first (behind components)
     wires.forEach(wire => {
       drawWire(ctx, wire);
-      drawCurrentFlow(ctx, wire, currentFlows);
     });
+
+    // Draw current flow
+    drawCurrentFlow(ctx);
 
     // Draw components
     components.forEach(component => {
@@ -306,54 +363,16 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  // Physics calculation loop
-  useEffect(() => {
-    const physicsInterval = setInterval(() => {
-      const currentTime = Date.now();
-      const newPhysicsState = calculateCircuitPhysics(
-        components,
-        wires,
-        currentTime,
-        physicsState || undefined
-      );
-      setPhysicsState(newPhysicsState);
-      setLastUpdateTime(currentTime);
-    }, 100); // Update physics every 100ms
-
-    return () => clearInterval(physicsInterval);
-  }, [components, wires]);
-
-  // Animation loop for current flow
-  useEffect(() => {
-    if (wires.length === 0) return;
-
-    // Initialize current flows for each wire
-    const flows: CurrentFlow[] = wires.map(wire => ({
-      id: `flow-${wire.id}`,
-      wireId: wire.id,
-      position: 0,
-      direction: 1
-    }));
-
-    setCurrentFlows(flows);
-
-    const animationInterval = setInterval(() => {
-      const flowSpeed = getCurrentFlowSpeed();
-      setCurrentFlows(prevFlows => 
-        prevFlows.map(flow => ({
-          ...flow,
-          position: (flow.position + 0.01 * flowSpeed * flow.direction) % 1
-        }))
-      );
-    }, 50);
-
-    return () => clearInterval(animationInterval);
-  }, [wires, currentSpeed, physicsState]);
-
   // Redraw canvas when data changes
   useEffect(() => {
-    drawCanvas();
-  }, [components, wires, currentFlows, isDragOver, draggedComponent]);
+    const redraw = () => {
+      drawCanvas();
+    };
+    
+    // Use RAF to smooth re-draws
+    const id = requestAnimationFrame(redraw);
+    return () => cancelAnimationFrame(id);
+  }, [components, wires, isDragOver, draggedComponent, currentCircuit]);
 
   // Handle canvas resize
   useEffect(() => {
@@ -374,7 +393,7 @@ const Canvas: React.FC<CanvasProps> = ({
     return () => window.removeEventListener('resize', resizeCanvas);
   }, []);
 
-  // Drag and drop handlers
+  // Drag and drop handlers with snap-to-wire
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(true);
@@ -393,21 +412,37 @@ const Canvas: React.FC<CanvasProps> = ({
       const rect = canvasRef.current?.getBoundingClientRect();
       
       if (rect) {
-        const x = e.clientX - rect.left - 30; // Center the component
-        const y = e.clientY - rect.top - 15;
+        const dropX = e.clientX - rect.left - 30; // Center the component
+        const dropY = e.clientY - rect.top - 15;
 
-        // Snap to wire if close enough
-        const snappedPosition = snapToWire(x, y);
+        // Try to snap to nearest wire
+        const nearestWire = findNearestWirePoint(dropX + 30, dropY + 15, wires, 20);
+        
+        let finalX = Math.max(0, Math.min(dropX, rect.width - 60));
+        let finalY = Math.max(0, Math.min(dropY, rect.height - 30));
+        let attachedWireId: string | undefined;
+        let attachedT: number | undefined;
+
+        if (nearestWire) {
+          finalX = Math.max(0, Math.min(nearestWire.x - 30, rect.width - 60));
+          finalY = Math.max(0, Math.min(nearestWire.y - 15, rect.height - 30));
+          attachedWireId = nearestWire.wireId;
+          attachedT = nearestWire.t;
+          toast.success(`Component snapped to wire`);
+        }
 
         const newComponent: Component = {
           id: `${componentData.type}-${Date.now()}`,
           type: componentData.type,
-          x: Math.max(0, Math.min(snappedPosition.x, rect.width - 60)),
-          y: Math.max(0, Math.min(snappedPosition.y, rect.height - 30)),
+          x: finalX,
+          y: finalY,
           value: componentData.value,
           width: 60,
           height: 30,
-          switchState: componentData.type === 'switch' ? true : undefined
+          switchState: componentData.type === 'switch' ? true : undefined,
+          attachedWireId,
+          attachedT,
+          isSelected: false
         };
 
         onComponentAdd(newComponent);
@@ -419,7 +454,7 @@ const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  // Mouse handlers for dragging components
+  // Mouse handlers for dragging and selecting components
   const handleMouseDown = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -428,24 +463,34 @@ const Canvas: React.FC<CanvasProps> = ({
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
 
-    // Find clicked component
-    const clickedComponent = components.find(comp => 
+    // Find clicked component (search in reverse order to prioritize top components)
+    const clickedComponent = [...components].reverse().find(comp => 
       x >= comp.x && x <= comp.x + comp.width &&
       y >= comp.y && y <= comp.y + comp.height
     );
 
     if (clickedComponent) {
-      // Handle switch click
+      // Handle switch click (toggle)
       if (clickedComponent.type === 'switch') {
         onSwitchClick(clickedComponent.id);
         return;
       }
       
-      setDraggedComponentId(clickedComponent.id);
-      setDragOffset({
-        x: x - clickedComponent.x,
-        y: y - clickedComponent.y
-      });
+      // Handle component selection
+      if (e.ctrlKey || e.metaKey) {
+        // Multi-select with Ctrl/Cmd
+        onComponentSelect(clickedComponent.id);
+      } else {
+        // Single select
+        onComponentSelect(clickedComponent.id);
+        
+        // Start drag
+        setDraggedComponentId(clickedComponent.id);
+        setDragOffset({
+          x: x - clickedComponent.x,
+          y: y - clickedComponent.y
+        });
+      }
     }
   };
 
@@ -459,12 +504,9 @@ const Canvas: React.FC<CanvasProps> = ({
     const x = e.clientX - rect.left - dragOffset.x;
     const y = e.clientY - rect.top - dragOffset.y;
 
-    // Snap to wire if close enough during drag
-    const snappedPosition = snapToWire(x, y);
-
     onComponentMove(draggedComponentId, 
-      Math.max(0, Math.min(snappedPosition.x, rect.width - 60)),
-      Math.max(0, Math.min(snappedPosition.y, rect.height - 30))
+      Math.max(0, Math.min(x, rect.width - 60)),
+      Math.max(0, Math.min(y, rect.height - 30))
     );
   };
 
@@ -491,16 +533,11 @@ const Canvas: React.FC<CanvasProps> = ({
         <div className="text-sm text-muted-foreground space-y-1">
           <div>Components: {components.length}</div>
           <div>Wires: {wires.length}</div>
-          {physicsState && (
-            <>
-              <div>Voltage: {physicsState.voltage.toFixed(1)}V</div>
-              <div>Current: {physicsState.current.toFixed(2)}A</div>
-              <div>Resistance: {physicsState.resistance.toFixed(1)}Ω</div>
-            </>
-          )}
+          <div>Current: {currentMagnitudeRef.current.toFixed(2)}A</div>
+          <div>Animation: {isAnimatingRef.current ? 'Active' : 'Paused'}</div>
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-current animate-pulse"></div>
-            Current flowing
+            <div className={`w-2 h-2 rounded-full ${isAnimatingRef.current ? 'bg-red-500 animate-pulse' : 'bg-gray-400'}`}></div>
+            Current flow
           </div>
         </div>
       </div>

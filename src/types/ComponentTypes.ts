@@ -10,6 +10,10 @@ export interface Component {
   height: number;
   rotation?: number;
   switchState?: boolean; // for switch components
+  numericValue?: number; // parsed numeric value for calculations
+  attachedWireId?: string; // ID of wire component is snapped to
+  attachedT?: number; // position along wire (0-1)
+  isSelected?: boolean; // selection state for deletion
 }
 
 export interface Wire {
