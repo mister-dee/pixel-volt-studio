@@ -45,19 +45,22 @@ const Canvas: React.FC<CanvasProps> = ({
 
   // Build animation path from wires
   useEffect(() => {
+    let fullPath: Point[] = [];
+    
     if (wires.length === 0) {
-      pathRef.current = [];
-      pathLengthsRef.current = [];
-      return;
+      // Fallback path when no wires exist
+      fullPath = [
+        { x: 50, y: 50 },
+        { x: 250, y: 50 }
+      ];
+    } else {
+      // Simple path construction - just concatenate all wire paths
+      wires.forEach(wire => {
+        if (wire.path.length > 0) {
+          fullPath.push(...wire.path);
+        }
+      });
     }
-
-    // Simple path construction - just concatenate all wire paths
-    const fullPath: Point[] = [];
-    wires.forEach(wire => {
-      if (wire.path.length > 0) {
-        fullPath.push(...wire.path);
-      }
-    });
 
     // Calculate cumulative lengths for parametric traversal
     const lengths: number[] = [0];
@@ -80,25 +83,32 @@ const Canvas: React.FC<CanvasProps> = ({
 
       const currentMagnitude = currentMagnitudeRef.current;
       const animationSpeed = getCurrentAnimationSpeed(currentMagnitude, currentSpeed);
-
-      // Check if animation should be running
-      const shouldAnimate = animationSpeed > 0 && pathRef.current.length > 1;
+      const pathPoints = pathRef.current;
       
-      if (shouldAnimate && !isAnimatingRef.current) {
+      // Debug logging (development only)
+      if (process.env.NODE_ENV === "development") {
+        console.log("Current:", currentMagnitudeRef.current, "Path:", pathPoints.length, "Distance:", progressRef.current);
+      }
+
+      // Always animate if path exists, but freeze dot when current is too low
+      const shouldAnimate = animationSpeed > 0 && pathPoints.length > 1;
+      
+      if (shouldAnimate) {
         isAnimatingRef.current = true;
-      } else if (!shouldAnimate && isAnimatingRef.current) {
-        isAnimatingRef.current = false;
-      }
-
-      if (isAnimatingRef.current && pathLengthsRef.current.length > 1) {
-        const totalLength = pathLengthsRef.current[pathLengthsRef.current.length - 1];
-        if (totalLength > 0) {
-          const distance = animationSpeed * dt;
-          progressRef.current = (progressRef.current + distance / totalLength) % 1;
+        if (pathLengthsRef.current.length > 1) {
+          const totalLength = pathLengthsRef.current[pathLengthsRef.current.length - 1];
+          if (totalLength > 0) {
+            const distance = animationSpeed * dt;
+            progressRef.current = (progressRef.current + distance / totalLength) % 1;
+          }
         }
+      } else {
+        // Freeze dot at first path point when current is too low
+        isAnimatingRef.current = false;
+        progressRef.current = 0;
       }
 
-      // Continue animation
+      // Continue animation loop (always running)
       animationIdRef.current = requestAnimationFrame(animate);
     };
 
@@ -232,7 +242,7 @@ const Canvas: React.FC<CanvasProps> = ({
   };
 
   const drawCurrentFlow = (ctx: CanvasRenderingContext2D) => {
-    if (!isAnimatingRef.current || pathRef.current.length < 2) return;
+    if (pathRef.current.length < 2) return;
 
     const path = pathRef.current;
     const lengths = pathLengthsRef.current;

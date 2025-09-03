@@ -112,7 +112,8 @@ export const createComponent = (type: ComponentType, x: number, y: number): Comp
     value: template?.value || '',
     width: 60,
     height: 30,
-    rotation: 0
+    rotation: 0,
+    switchState: type === 'switch' ? true : undefined
   };
 };
 
