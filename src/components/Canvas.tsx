@@ -204,9 +204,18 @@ const Canvas: React.FC<CanvasProps> = ({
 
     ctx.fillText(symbol, centerX, centerY - 5);
     
-    // Component value
+    // Component value with special handling for voltage sources
     ctx.font = '10px monospace';
-    ctx.fillText(value, centerX, centerY + 8);
+    let displayValue = value;
+    
+    // For voltage sources, ensure voltage is displayed
+    if (type === 'voltage-source' || type === 'ac-source') {
+      if (!value || !value.includes('V')) {
+        displayValue = type === 'voltage-source' ? '9V' : '120V';
+      }
+    }
+    
+    ctx.fillText(displayValue, centerX, centerY + 8);
 
     // Connection points
     ctx.fillStyle = '#10b981';
